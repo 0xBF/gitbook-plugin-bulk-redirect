@@ -14,36 +14,102 @@
  * limitations under the License.
  */
 
-var url = require("url");
 var fs = require("fs");
+var mkdirp = require('mkdirp');
+var nunjucks = require("nunjucks");
+var path = require("path");
+var url = require("url");
 
-var content = function(path) {
-  var s = "<!DOCTYPE HTML><html><head><meta charset='UTF-8'><title>Redirecting... Page moved</title>" +
-        "<link rel='canonical' href='{}'><meta http-equiv=refresh content='0; url={:?}'></head>" +
+var config = {};
+
+var defaultTemplate =
+        "<!DOCTYPE HTML><html><head><meta charset='UTF-8'><title>Redirecting... Page moved</title>" +
+        "<link rel='canonical' href='{{ item.to }}'><meta http-equiv=refresh content='0; url={{ item.to }}'></head>" +
         "<body><h1>Redirecting... Page moved...</h1>" +
-        "<p><a href='{}'>Click here if you are not redirected</a></p>" +
-        "<script>window.location.href='{}';</script>" +
+        "<p><a href='{{ item.to }}'>Click here if you are not redirected</a></p>" +
+        "<script>window.location.href='{{ item.to }}';</script>" +
         "</body></html>";
-  return s.replace(/\{\}/gm, path).replace(/\{\:\?\}/gm, encodeURI(path));
-};
 
+var getConfig = function(book) {
+  var key = book.output.root();
+
+  if (!config[key]) {
+    config[key] = Object.assign(
+      {},
+      { basepath: "/",
+        templateFile: "redirect.html",
+        allowRelative: false,
+        redirectsFile: "redirects.json",
+        redirects: []
+      },
+      book.config.get("pluginsConfig.bulk-redirect"));
+  }
+
+  return config[key];
+}
+
+var validRedirect = function(item) {
+  return (item.from && item.to);
+}
+
+var writeFile = function(book, conf, item) {
+  var resolved = url.resolve(conf.basepath, item.to);
+
+  var ctx = {
+    book: book,
+    item: Object.assign({}, item, {to: resolved})
+  }
+
+  var content = nunjucks.renderString(conf.template, ctx);
+
+  var filename = path.join(book.output.root(), item.from);
+  var outsideRoot = (path.relative(book.output.root(), filename)[0,3] == '../');
+
+  if (outsideRoot && !conf.allowRelative)
+    throw "Relative paths disabled";
+
+  mkdirp.sync(path.dirname(filename));
+  fs.writeFileSync(filename, content);
+
+  book.log.debug("Redirect " + item.from + " -> " + resolved + "\n");
+}
 
 module.exports = {
   hooks: {
+    "init": function() {
+      var g = this;
+      var conf = getConfig(this);
+
+      return this.readFileAsString(conf.templateFile)
+
+      .catch(function() {})
+
+      .then(function(data) {
+        conf.template = ( data || defaultTemplate );
+
+        return g.readFileAsString(conf.redirectsFile)
+      })
+
+      .catch(function() {})
+
+      .then(function(data) {
+        var json = JSON.parse(data || "{}");
+
+        if (json && json.redirects)
+          conf.redirects = json.redirects.filter(validRedirect);
+      })
+
+      .then(function() {
+        g.log.info.ln( "found " + conf.redirects.length + " redirects");
+      })
+    },
+
     "finish": function() {
-      var redirectConf = this.config.get("pluginsConfig.bulk-redirect");
-      var conf = JSON.parse(fs.readFileSync(redirectConf.redirectsFile, "utf-8"));
-
-      if (!conf || !conf.redirects) return;
-
-      var basepath = redirectConf.basepath || "/";
+      var conf = getConfig(this);
       var g = this;
 
       conf.redirects.forEach(function (item) {
-        if (!item.from || !item.to) return;
-        var resolved = url.resolve(basepath, item.to);
-        g.output.writeFile(item.from, content(resolved));
-        g.log.debug("Redirect " + item.from + " -> " + resolved + "\n");
+        writeFile(g, conf, item);
       });
     }
   }

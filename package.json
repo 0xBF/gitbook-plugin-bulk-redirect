@@ -12,6 +12,10 @@
         "url": "https://github.com/getgauge-contrib/gitbook-plugin-bulk-redirect.git"
     },
     "license": "Apache-2.0",
+    "dependencies": {
+      "mkdirp": "*",
+      "nunjucks": "*"
+    },
     "bugs": {
         "url": "https://github.com/getgauge-contrib/gitbook-plugin-bulk-redirect/issues"
     },
